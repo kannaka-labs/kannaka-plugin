@@ -12,11 +12,11 @@
 # install they didn't ask for).
 #
 # Idempotent — safe to re-run. The .msi wraps this; you can also run it directly:
-#   irm https://raw.githubusercontent.com/NickFlach/kannaka-plugin/master/install/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/kannaka-labs/kannaka-plugin/master/install/install.ps1 | iex
 [CmdletBinding()]
 param(
-  [string]$ReleaseRepo = "NickFlach/kannaka-memory",
-  [string]$TuiRepo = "NickFlach/kannaka-tui",
+  [string]$ReleaseRepo = "kannaka-labs/kannaka-memory",
+  [string]$TuiRepo = "kannaka-labs/kannaka-tui",
   [switch]$WithClaude,
   [switch]$SkipStatusline,
   [switch]$SkipTui,
@@ -41,7 +41,7 @@ param(
   [string]$Email = $env:KANNAKA_BRAIN_EMAIL
 )
 
-$InstallUrl = "https://raw.githubusercontent.com/NickFlach/kannaka-plugin/master/install/install.ps1"
+$InstallUrl = "https://raw.githubusercontent.com/kannaka-labs/kannaka-plugin/master/install/install.ps1"
 
 function Say($m)  { Write-Host "▸ $m" -ForegroundColor Cyan }
 function Warn($m) { Write-Host "! $m" -ForegroundColor Yellow }
@@ -264,7 +264,7 @@ if (-not $SkipTui -and -not $ClaimOnly) {
 $hdl = Join-Path $dest "kannaka-hdl.exe"
 if (-not $SkipHdl -and -not $ClaimOnly) {
   try {
-    Install-Pinned -Component "kannaka-hdl" -Repo "flaukowski/kannaka-hdl" -Asset "kannaka-hdl-windows-x86_64.exe" -Target $hdl -Label "kannaka-hdl"
+    Install-Pinned -Component "kannaka-hdl" -Repo "kannaka-labs/kannaka-hdl" -Asset "kannaka-hdl-windows-x86_64.exe" -Target $hdl -Label "kannaka-hdl"
   } catch {
     Warn "kannaka-hdl was not installed — the engine is fine; re-run to retry. ($_)"
   }
@@ -509,7 +509,7 @@ if (-not (Have claude) -and $WithClaude) {
 if (Have claude) {
   Say "Claude Code detected — registering marketplace + installing plugin…"
   try {
-    claude plugin marketplace add NickFlach/kannaka-plugin 2>$null | Out-Null
+    claude plugin marketplace add kannaka-labs/kannaka-plugin 2>$null | Out-Null
     claude plugin install kannaka@kannaka 2>$null | Out-Null
     Ok "kannaka plugin installed into Claude Code"
   } catch { Warn "plugin registration reported: $_" }
@@ -538,7 +538,7 @@ if (Have claude) {
   Write-Host ""
   Say "Want the Claude Code plugin + live statusline too? Install Claude Code, then re-run this"
   Say "installer (or pass -WithClaude), or inside Claude run:"
-  Say "    claude plugin marketplace add NickFlach/kannaka-plugin"
+  Say "    claude plugin marketplace add kannaka-labs/kannaka-plugin"
   Say "    claude plugin install kannaka@kannaka"
 }
 

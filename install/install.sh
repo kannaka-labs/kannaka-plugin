@@ -12,10 +12,10 @@
 # off by default so standalone users aren't forced into a Node/Claude install).
 #
 # Idempotent — safe to re-run. Run directly:
-#   curl -fsSL https://raw.githubusercontent.com/NickFlach/kannaka-plugin/master/install/install.sh | sh
-RELEASE_REPO="${KANNAKA_RELEASE_REPO:-NickFlach/kannaka-memory}"
-TUI_REPO="${KANNAKA_TUI_REPO:-NickFlach/kannaka-tui}"
-INSTALL_URL="https://raw.githubusercontent.com/NickFlach/kannaka-plugin/master/install/install.sh"
+#   curl -fsSL https://raw.githubusercontent.com/kannaka-labs/kannaka-plugin/master/install/install.sh | sh
+RELEASE_REPO="${KANNAKA_RELEASE_REPO:-kannaka-labs/kannaka-memory}"
+TUI_REPO="${KANNAKA_TUI_REPO:-kannaka-labs/kannaka-tui}"
+INSTALL_URL="https://raw.githubusercontent.com/kannaka-labs/kannaka-plugin/master/install/install.sh"
 WITH_CLAUDE=0
 SKIP_TUI=0
 # Constellation Pass credentials. Accepted as flags or environment so the
@@ -340,7 +340,7 @@ fi
 # ───────────────────────────────────────────────────────────────────────────
 if [ "$SKIP_HDL" != "1" ] && [ "$CLAIM_ONLY" != "1" ]; then
   set +e
-  fetch_pinned "kannaka-hdl" "flaukowski/kannaka-hdl" "kannaka-hdl-${o}-${a}" "$DEST/kannaka-hdl" "kannaka-hdl"
+  fetch_pinned "kannaka-hdl" "kannaka-labs/kannaka-hdl" "kannaka-hdl-${o}-${a}" "$DEST/kannaka-hdl" "kannaka-hdl"
   hdl_rc=$?
   set -e
   [ "$hdl_rc" -eq 0 ] || warn "kannaka-hdl was not installed — the engine is fine; re-run to retry."
@@ -630,7 +630,7 @@ fi
 
 if have claude; then
   say "Claude Code detected — registering marketplace + installing plugin…"
-  claude plugin marketplace add NickFlach/kannaka-plugin >/dev/null 2>&1 || true
+  claude plugin marketplace add kannaka-labs/kannaka-plugin >/dev/null 2>&1 || true
   claude plugin install kannaka@kannaka >/dev/null 2>&1 || true
   ok "kannaka plugin installed into Claude Code"
   if [ "${SKIP_STATUSLINE:-0}" != "1" ]; then
@@ -648,7 +648,7 @@ else
   printf '\n'
   say "Want the Claude Code plugin + live statusline too? Install Claude Code, then re-run"
   say "this installer (or pass --with-claude), or inside Claude run:"
-  say "    claude plugin marketplace add NickFlach/kannaka-plugin"
+  say "    claude plugin marketplace add kannaka-labs/kannaka-plugin"
   say "    claude plugin install kannaka@kannaka"
 fi
 
