@@ -61,3 +61,10 @@ jobs:
       - name: installer checksum hard-fail (install.ps1)
         shell: pwsh
         run: ./tests/installer-checksum.ps1
+
+      # The manifest reader and the [llm] rewrite decide which binary lands on
+      # disk and where `kannaka ask` points. Both are exercised against the
+      # real functions, lifted out of install.ps1 rather than copied.
+      - name: manifest pinning + brain config (install.ps1)
+        shell: pwsh
+        run: ./tests/installer-manifest.ps1

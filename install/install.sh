@@ -26,6 +26,18 @@ NATS_PASS_ARG="${KANNAKA_NATS_PASSWORD:-}"
 CLAIM=0
 CLAIM_ONLY=0
 PORTAL_API="${KANNAKA_PORTAL_API:-https://ninja-portal.com}"
+# The constellation manifest: one signed document naming every component's
+# pinned release, asset URL and sha256. Read first, so an install is a
+# COHERENT SET rather than whatever each repo's `latest` happened to be when
+# each download ran. Unreachable manifest = fall back to `latest` and say so.
+MANIFEST_URL="${KANNAKA_MANIFEST:-https://ninja-portal.com/constellation.tsv}"
+MANIFEST_FALLBACK="https://nickflach.github.io/kannaka-library/constellation.tsv"
+MANIFEST=""            # path to the verified copy, empty when unavailable
+MANIFEST_STATE="none"  # none | unsigned | signed
+NO_MANIFEST=0
+SKIP_HDL=0
+BRAIN=""               # local | hosted | none (empty = say how, do nothing)
+BRAIN_EMAIL="${KANNAKA_BRAIN_EMAIL:-}"
 while [ $# -gt 0 ]; do
   case "$1" in
     --with-claude) WITH_CLAUDE=1 ;;
@@ -36,6 +48,17 @@ while [ $# -gt 0 ]; do
     --nats-user=*) NATS_USER_ARG="${1#*=}" ;;
     --nats-password=*) NATS_PASS_ARG="${1#*=}" ;;
     --claim) CLAIM=1 ;;
+    --no-manifest) NO_MANIFEST=1 ;;
+    --manifest) MANIFEST_URL="${2:-}"; shift ;;
+    --manifest=*) MANIFEST_URL="${1#*=}" ;;
+    --skip-hdl) SKIP_HDL=1 ;;
+    # A brain is what makes `kannaka ask` answer in her voice. Local runs the
+    # open weights under ollama and costs nothing; hosted mints a budgeted key
+    # against ninja-portal.com/v1. Neither is done unless asked for.
+    --brain) BRAIN="${2:-}"; shift ;;
+    --brain=*) BRAIN="${1#*=}" ;;
+    --email) BRAIN_EMAIL="${2:-}"; shift ;;
+    --email=*) BRAIN_EMAIL="${1#*=}" ;;
     # Link a pass on a machine that already has the engine. This is what the
     # double-clickable launcher runs, so it must not spend a minute
     # re-downloading binaries the user already has.
@@ -48,6 +71,85 @@ say()  { printf '\033[36m▸\033[0m %s\n' "$1"; }
 warn() { printf '\033[33m!\033[0m %s\n' "$1" >&2; }
 ok()   { printf '\033[32m✓\033[0m %s\n' "$1"; }
 have() { command -v "$1" >/dev/null 2>&1; }
+
+# ───────────────────────────────────────────────────────────────────────────
+# THE MANIFEST
+#
+# constellation.tsv is the shell-readable half of constellation.json: one line
+# per fact, tab separated, so `awk` is the entire parser and this script keeps
+# its "no dependencies" promise. It is served from ninja-portal.com and
+# mirrored on GitHub Pages, and it is signed with the constellation's ed25519
+# key.
+#
+# The signature is checked when openssl can do it (OpenSSL 3 `pkeyutl -rawin`;
+# LibreSSL, which is what macOS ships as `openssl`, cannot, and Homebrew's
+# openssl3 is looked for by path). It is defence in depth rather than the only
+# defence: every asset this script installs is checked against the sha256 the
+# manifest carries, so a tampered manifest still cannot make an unverified
+# binary land on disk — it can only name a different, real, hashed file.
+# ───────────────────────────────────────────────────────────────────────────
+MANIFEST_PUB_URL="${KANNAKA_MANIFEST_PUB:-https://nickflach.github.io/kannaka-library/manifest.pub}"
+
+openssl3() {
+  for c in /opt/homebrew/opt/openssl@3/bin/openssl /usr/local/opt/openssl@3/bin/openssl openssl; do
+    if command -v "$c" >/dev/null 2>&1 && "$c" version 2>/dev/null | grep -q '^OpenSSL 3'; then
+      printf '%s' "$c"; return 0
+    fi
+  done
+  return 1
+}
+
+load_manifest() {
+  [ "$NO_MANIFEST" = "1" ] && { say "Manifest skipped (--no-manifest); using each repo's latest release."; return 1; }
+  have curl || return 1
+  lm_tmp="${TMPDIR:-/tmp}/kannaka-manifest.$$"
+  if ! curl -fsSL --max-time 20 "$MANIFEST_URL" -o "$lm_tmp" 2>/dev/null; then
+    curl -fsSL --max-time 20 "$MANIFEST_FALLBACK" -o "$lm_tmp" 2>/dev/null || {
+      rm -f "$lm_tmp"
+      warn "Could not fetch the constellation manifest — falling back to each repo's latest release."
+      return 1
+    }
+  fi
+  # A file that is not the manifest is worse than no manifest: it would make
+  # every lookup miss silently and the install would quietly de-pin itself.
+  if ! head -1 "$lm_tmp" | grep -q '^# kannaka-constellation/1'; then
+    rm -f "$lm_tmp"; warn "The manifest did not look like a manifest — using latest releases."; return 1
+  fi
+  MANIFEST="$lm_tmp"; MANIFEST_STATE="unsigned"
+  if ssl=$(openssl3) && curl -fsSL --max-time 20 "${MANIFEST_URL}.sig" -o "$lm_tmp.sig" 2>/dev/null \
+     && curl -fsSL --max-time 20 "$MANIFEST_PUB_URL" -o "$lm_tmp.pub" 2>/dev/null; then
+    if base64 -d < "$lm_tmp.sig" > "$lm_tmp.sigraw" 2>/dev/null || base64 -D < "$lm_tmp.sig" > "$lm_tmp.sigraw" 2>/dev/null; then
+      if "$ssl" pkeyutl -verify -pubin -inkey "$lm_tmp.pub" -rawin -in "$lm_tmp" -sigfile "$lm_tmp.sigraw" >/dev/null 2>&1; then
+        MANIFEST_STATE="signed"
+      else
+        # A manifest that fails its own signature is the one case where
+        # falling back is right: prefer no manifest to a bad one.
+        rm -f "$lm_tmp" "$lm_tmp.sig" "$lm_tmp.pub" "$lm_tmp.sigraw"
+        MANIFEST=""; MANIFEST_STATE="none"
+        warn "The manifest's signature did NOT verify — ignoring it and using latest releases."
+        return 1
+      fi
+    fi
+  fi
+  rm -f "$lm_tmp.sig" "$lm_tmp.pub" "$lm_tmp.sigraw"
+  mf_gen=$(head -1 "$MANIFEST" | awk -F'\t' '{print $3}')
+  ok "Manifest loaded (${MANIFEST_STATE}, generated ${mf_gen})"
+  return 0
+}
+
+# manifest_asset <component> <target>  ->  "url<TAB>sha256" on stdout
+manifest_asset() {
+  [ -n "$MANIFEST" ] || return 1
+  awk -F'\t' -v c="$1" -v t="$2" '$1=="asset" && $2==c && $4==t {print $5 "\t" $6; found=1; exit} END{exit !found}' "$MANIFEST"
+}
+manifest_version() {
+  [ -n "$MANIFEST" ] || return 1
+  awk -F'\t' -v c="$1" '$1=="component" && $2==c {print $3; found=1; exit} END{exit !found}' "$MANIFEST"
+}
+manifest_field() { # manifest_field <kind> <id> <column>
+  [ -n "$MANIFEST" ] || return 1
+  awk -F'\t' -v k="$1" -v i="$2" -v n="$3" '$1==k && $2==i {print $n; found=1; exit} END{exit !found}' "$MANIFEST"
+}
 
 # The rc file THIS user's interactive shell will actually read, created if it
 # does not exist yet.
@@ -147,7 +249,42 @@ fetch_verified() {
   ok "$fv_label installed → $fv_dest"
 }
 
-[ "$CLAIM_ONLY" = "1" ] || fetch_verified "$RELEASE_REPO" "kannaka-${o}-${a}" "$DEST/kannaka" "kannaka" || exit 1
+# Download a component the manifest pinned: an exact URL and an exact sha256,
+# neither of them derived from a repo name or from "latest". Falls back to the
+# release-latest path when the component is not in the manifest, so a new
+# component works before the manifest knows about it.
+fetch_pinned() {
+  fp_comp="$1"; fp_repo="$2"; fp_asset="$3"; fp_dest="$4"; fp_label="$5"
+  if fp_row=$(manifest_asset "$fp_comp" "${o}-${a}" 2>/dev/null) && [ -n "$fp_row" ]; then
+    fp_url=$(printf '%s' "$fp_row" | cut -f1)
+    fp_want=$(printf '%s' "$fp_row" | cut -f2)
+    fp_ver=$(manifest_version "$fp_comp" 2>/dev/null || printf 'pinned')
+    if [ -n "$fp_url" ] && [ "$fp_url" != "-" ] && [ -n "$fp_want" ] && [ "$fp_want" != "-" ]; then
+      say "Downloading $fp_label $fp_ver (pinned)…"
+      if ! curl -fSL "$fp_url" -o "$fp_dest"; then
+        warn "Failed to download $fp_label from $fp_url"; rm -f "$fp_dest"; return 1
+      fi
+      if have sha256sum; then fp_got=$(sha256sum "$fp_dest" | awk '{print $1}')
+      elif have shasum; then fp_got=$(shasum -a 256 "$fp_dest" | awk '{print $1}')
+      else warn "no sha256 tool available — cannot verify"; rm -f "$fp_dest"; return 1; fi
+      if [ "$fp_want" != "$fp_got" ]; then
+        warn "$fp_label sha256 mismatch against the manifest (want $fp_want got $fp_got)"
+        rm -f "$fp_dest"; return 1
+      fi
+      say "sha256 verified against the manifest"
+      chmod +x "$fp_dest"
+      ok "$fp_label $fp_ver installed → $fp_dest"
+      return 0
+    fi
+  fi
+  fetch_verified "$fp_repo" "$fp_asset" "$fp_dest" "$fp_label"
+}
+
+if [ "$CLAIM_ONLY" != "1" ]; then
+  set +e; load_manifest; set -e
+fi
+
+[ "$CLAIM_ONLY" = "1" ] || fetch_pinned "kannaka" "$RELEASE_REPO" "kannaka-${o}-${a}" "$DEST/kannaka" "kannaka" || exit 1
 
 # ───────────────────────────────────────────────────────────────────────────
 # 2. PATH: make sure ~/.local/bin is reachable, or `kannaka` looks like it
@@ -187,10 +324,26 @@ fi
 # ───────────────────────────────────────────────────────────────────────────
 if [ "$SKIP_TUI" != "1" ] && [ "$CLAIM_ONLY" != "1" ]; then
   set +e
-  fetch_verified "$TUI_REPO" "kannaka-tui-${o}-${a}" "$DEST/kannaka-tui" "kannaka-tui"
+  fetch_pinned "kannaka-tui" "$TUI_REPO" "kannaka-tui-${o}-${a}" "$DEST/kannaka-tui" "kannaka-tui"
   tui_rc=$?
   set -e
   [ "$tui_rc" -eq 0 ] || warn "kannaka-tui was not installed — the engine is fine; re-run to retry."
+fi
+
+# ───────────────────────────────────────────────────────────────────────────
+# 2b-ii. THE LANGUAGE: kannaka-hdl → ~/.local/bin
+#
+# KannakaHDL grows an architecture against a registry of what a machine
+# actually has, and refuses when a part has no honest answer. It is what the
+# `mind` app runs to ask "is this citizen whole?", so it belongs in the same
+# install as the engine rather than in a separate errand. Not fatal.
+# ───────────────────────────────────────────────────────────────────────────
+if [ "$SKIP_HDL" != "1" ] && [ "$CLAIM_ONLY" != "1" ]; then
+  set +e
+  fetch_pinned "kannaka-hdl" "flaukowski/kannaka-hdl" "kannaka-hdl-${o}-${a}" "$DEST/kannaka-hdl" "kannaka-hdl"
+  hdl_rc=$?
+  set -e
+  [ "$hdl_rc" -eq 0 ] || warn "kannaka-hdl was not installed — the engine is fine; re-run to retry."
 fi
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -343,6 +496,122 @@ if [ -f "$CREDS" ]; then
   . "$CREDS" 2>/dev/null || true
 fi
 
+
+# ───────────────────────────────────────────────────────────────────────────
+# 2d. THE BRAIN: what `kannaka ask` answers with.
+#
+# Kannaka's own model — Qwen2.5 with LoRA adapters trained on her words — runs
+# two ways, and the choice is a config rather than a fork:
+#
+#   --brain local    open weights under ollama. Free, offline, ~4.7 GB.
+#   --brain hosted   a budgeted key against ninja-portal.com/v1, mailed to
+#                    --email. The gateway meters it; nothing here can overspend.
+#
+# Neither happens unless asked for: a 4.7 GB pull nobody requested is not a
+# courtesy, and a key is tied to an email address the user has to choose to
+# give. With no --brain, this prints the two commands and moves on.
+#
+# The result is the [llm] section of ~/.kannaka/config.toml, which is what
+# `kannaka ask` reads. An existing [llm] block is left alone unless --brain was
+# explicitly passed, so re-running the installer cannot silently repoint a
+# machine that was already configured.
+# ───────────────────────────────────────────────────────────────────────────
+KCONF="$HOME/.kannaka/config.toml"
+
+# Replace (or append) the [llm] table. Written to a temp file and moved into
+# place so an interrupted write cannot leave a half-config that the binary
+# then refuses to parse.
+write_llm_config() {
+  wl_provider="$1"; wl_model="$2"; wl_key="$3"; wl_base="$4"
+  mkdir -p "$(dirname "$KCONF")"
+  wl_tmp="$KCONF.tmp.$$"
+  if [ -f "$KCONF" ]; then
+    awk '
+      /^\[llm\][[:space:]]*$/ { skip=1; next }
+      /^\[/ { skip=0 }
+      !skip { print }
+    ' "$KCONF" > "$wl_tmp"
+  else
+    : > "$wl_tmp"
+  fi
+  {
+    printf '\n[llm]\nprovider = "%s"\nmodel = "%s"\napi_key = "%s"\nbase_url = "%s"\n' \
+      "$wl_provider" "$wl_model" "$wl_key" "$wl_base"
+  } >> "$wl_tmp"
+  ( umask 077; mv "$wl_tmp" "$KCONF" )
+  chmod 600 "$KCONF" 2>/dev/null || true
+}
+
+brain_local() {
+  if ! have ollama; then
+    warn "--brain local needs ollama (https://ollama.com/download); skipping."
+    return 1
+  fi
+  bl_model=$(manifest_field local brain 3 2>/dev/null || printf 'kannaka-brain')
+  bl_from=$(manifest_field local brain 4 2>/dev/null || printf 'hf.co/flaukowski/kannaka-brain-7b-v1-GGUF')
+  [ -n "$bl_model" ] && [ "$bl_model" != "-" ] || bl_model="kannaka-brain"
+  [ -n "$bl_from" ] && [ "$bl_from" != "-" ] || bl_from="hf.co/flaukowski/kannaka-brain-7b-v1-GGUF"
+  if ollama list 2>/dev/null | awk '{print $1}' | grep -q "^${bl_model}:"; then
+    ok "ollama already has $bl_model"
+  else
+    say "Pulling $bl_from as $bl_model (about 4.7 GB — this takes a while)…"
+    if ! ollama pull "$bl_from" >/dev/null 2>&1; then
+      warn "ollama could not pull $bl_from; skipping the local brain."
+      return 1
+    fi
+    ollama cp "$bl_from" "$bl_model" >/dev/null 2>&1 || true
+    ok "local brain ready: $bl_model"
+  fi
+  write_llm_config openai "$bl_model" "ollama" "${OLLAMA_HOST:-http://127.0.0.1:11434}/v1"
+  ok "kannaka ask → local $bl_model"
+}
+
+brain_hosted() {
+  if [ -z "$BRAIN_EMAIL" ]; then
+    warn "--brain hosted needs --email you@example.com (the key is mailed there); skipping."
+    return 1
+  fi
+  have curl || { warn "--brain hosted needs curl"; return 1; }
+  bh_base=$(manifest_field hosted brain 3 2>/dev/null || printf '%s/v1' "$PORTAL_API")
+  [ -n "$bh_base" ] && [ "$bh_base" != "-" ] || bh_base="$PORTAL_API/v1"
+  say "Requesting a hosted brain key for $BRAIN_EMAIL…"
+  bh_body=$(printf '{"email":"%s","purpose":"installer"}' "$BRAIN_EMAIL")
+  bh_out=$(curl -fsS -X POST -H 'content-type: application/json' -d "$bh_body" "$PORTAL_API/api/brain/key" 2>/dev/null) || bh_out=""
+  bh_key=$(printf '%s' "$bh_out" | sed -n 's/.*"key" *: *"\([^"]*\)".*/\1/p')
+  if [ -z "$bh_key" ]; then
+    case "$bh_out" in
+      *"already holds an active key"*)
+        warn "That email already has an active key — it was mailed when issued. Re-run with --brain none and paste it into $KCONF." ;;
+      *) warn "The portal did not issue a key. Get one at $PORTAL_API/brain" ;;
+    esac
+    return 1
+  fi
+  bh_model=$(manifest_field hosted brain 5 2>/dev/null | cut -d, -f1)
+  [ -n "$bh_model" ] && [ "$bh_model" != "-" ] || bh_model="kannaka-brain-7b-v1"
+  write_llm_config openai "$bh_model" "$bh_key" "$bh_base"
+  ok "kannaka ask → hosted $bh_model at $bh_base"
+  say "The key is budgeted and rate-limited by the gateway; usage at $PORTAL_API/brain#key"
+}
+
+if [ "$CLAIM_ONLY" != "1" ]; then
+  set +e
+  case "$BRAIN" in
+    local)  brain_local ;;
+    hosted) brain_hosted ;;
+    none|"")
+      if grep -qs '^\[llm\]' "$KCONF" 2>/dev/null; then
+        say "Brain: leaving the [llm] section of $KCONF as it is."
+      else
+        printf '\n'
+        say "No brain configured yet. 'kannaka ask' needs one:"
+        say "    re-run with  --brain local                  (open weights under ollama, free)"
+        say "    re-run with  --brain hosted --email you@…   (a budgeted key on our gateway)"
+      fi ;;
+    *) warn "unknown --brain '$BRAIN' (local | hosted | none)" ;;
+  esac
+  set -e
+fi
+
 # ───────────────────────────────────────────────────────────────────────────
 # 3. OPTIONAL: Claude Code integration. Detect-and-enhance. Never fatal.
 # ───────────────────────────────────────────────────────────────────────────
@@ -386,6 +655,11 @@ fi
 printf '\n'
 ok "Done. kannaka → $DEST/kannaka"
 [ -x "$DEST/kannaka-tui" ] && ok "     kannaka-tui → $DEST/kannaka-tui"
+[ -x "$DEST/kannaka-hdl" ] && ok "     kannaka-hdl → $DEST/kannaka-hdl"
+if [ "$MANIFEST_STATE" != "none" ]; then
+  ok "     versions pinned by the constellation manifest ($MANIFEST_STATE)"
+fi
+[ -n "${MANIFEST:-}" ] && rm -f "$MANIFEST"
 if [ -n "${NATS_USER:-}" ]; then
   ok "     Constellation Pass: authenticated as $NATS_USER"
 else
