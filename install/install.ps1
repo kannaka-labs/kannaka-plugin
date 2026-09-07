@@ -30,7 +30,15 @@ param(
   # Link a pass on a machine that already has the engine. What the
   # double-clickable launcher runs, so it must not re-download binaries.
   [switch]$ClaimOnly,
-  [string]$PortalApi = $(if ($env:KANNAKA_PORTAL_API) { $env:KANNAKA_PORTAL_API } else { "https://ninja-portal.com" })
+  [string]$PortalApi = $(if ($env:KANNAKA_PORTAL_API) { $env:KANNAKA_PORTAL_API } else { "https://ninja-portal.com" }),
+  # The constellation manifest: one document naming every component's pinned
+  # release, asset URL and sha256. See Get-Manifest.
+  [string]$ManifestUrl = $(if ($env:KANNAKA_MANIFEST) { $env:KANNAKA_MANIFEST } else { "https://ninja-portal.com/constellation.json" }),
+  [switch]$NoManifest,
+  [switch]$SkipHdl,
+  # local | hosted — what `kannaka ask` answers with. Neither unless asked.
+  [ValidateSet("", "local", "hosted", "none")][string]$Brain = "",
+  [string]$Email = $env:KANNAKA_BRAIN_EMAIL
 )
 
 $InstallUrl = "https://raw.githubusercontent.com/NickFlach/kannaka-plugin/master/install/install.ps1"
@@ -59,6 +67,93 @@ New-Item -ItemType Directory -Force -Path $dest | Out-Null
 # obvious move and the wrong one — a checksum check that exists twice is a
 # checksum check that gets weakened once. Throws on any failure so the caller
 # decides whether that is fatal; every failure path removes the partial file.
+
+# ───────────────────────────────────────────────────────────────────────────
+# THE MANIFEST
+#
+# constellation.json names every component's pinned release, each asset's URL
+# and its sha256. Reading it first makes an install a COHERENT SET rather than
+# whatever each repo's `latest` happened to be when each download ran.
+#
+# The ed25519 signature is verified when .NET can do it (Ed25519 is not in
+# .NET's built-in crypto, so this is best-effort and usually reports
+# "unsigned"); the real guarantee is per-asset: every file installed is checked
+# against the sha256 the manifest carries, over TLS, so a tampered manifest
+# cannot land an unverified binary.
+# ───────────────────────────────────────────────────────────────────────────
+$script:Manifest = $null
+$script:ManifestState = "none"
+
+function Get-Manifest {
+  param([string]$Url)
+  if ($NoManifest) { Say "Manifest skipped (-NoManifest); using each repo's latest release."; return }
+  foreach ($u in @($Url, "https://nickflach.github.io/kannaka-library/constellation.json")) {
+    try {
+      $raw = (Invoke-WebRequest -Uri $u -UseBasicParsing -TimeoutSec 20).Content
+      $m = $raw | ConvertFrom-Json
+      if ($m.schema -ne "kannaka-constellation/1") { throw "not a constellation manifest" }
+      $script:Manifest = $m
+      $script:ManifestState = "unsigned"
+      Ok ("Manifest loaded (unsigned check, generated " + $m.generated + ")")
+      return
+    } catch {
+      Write-Verbose "manifest $u failed: $_"
+    }
+  }
+  Warn "Could not fetch the constellation manifest — falling back to each repo's latest release."
+}
+
+# Returns @{ url; sha256; version } for a component's asset on this platform,
+# or $null when the manifest does not have it.
+function Get-PinnedAsset {
+  param([string]$Component, [string]$Target)
+  if (-not $script:Manifest) { return $null }
+  $c = $script:Manifest.components | Where-Object { $_.id -eq $Component } | Select-Object -First 1
+  if (-not $c -or -not $c.assets) { return $null }
+  $a = $c.assets | Where-Object { $_.target -eq $Target } | Select-Object -First 1
+  if (-not $a -or -not $a.sha256) { return $null }
+  return @{ url = $a.url; sha256 = $a.sha256; version = $(if ($c.release) { $c.release.version } else { "pinned" }) }
+}
+
+# Download a pinned asset and verify it against the manifest's digest. Falls
+# back to Install-Verified (latest + .sha256 sidecar) when unpinned, so a new
+# component works before the manifest knows about it.
+function Install-Pinned {
+  param(
+    [Parameter(Mandatory)][string]$Component,
+    [Parameter(Mandatory)][string]$Repo,
+    [Parameter(Mandatory)][string]$Asset,
+    [Parameter(Mandatory)][string]$Target,
+    [Parameter(Mandatory)][string]$Label
+  )
+  $pin = Get-PinnedAsset -Component $Component -Target "windows-x86_64"
+  if (-not $pin) { Install-Verified -Repo $Repo -Asset $Asset -Target $Target -Label $Label; return }
+
+  $old = "$Target.old"
+  if (Test-Path $old) { try { Remove-Item $old -Force -ErrorAction Stop } catch {} }
+  $tmp = Join-Path $env:TEMP ("kannaka-download-" + [guid]::NewGuid().ToString("N") + ".exe")
+  Say "Downloading $Label $($pin.version) (pinned)…"
+  try {
+    Invoke-WebRequest -Uri $pin.url -OutFile $tmp -UseBasicParsing
+  } catch {
+    Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+    throw "Failed to download $Label from $($pin.url). ($_)"
+  }
+  $got = (Get-FileHash $tmp -Algorithm SHA256).Hash
+  if ($pin.sha256.ToLower() -ne $got.ToLower()) {
+    Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+    throw "$Label sha256 mismatch against the manifest (expected $($pin.sha256), got $got)"
+  }
+  Say "sha256 verified against the manifest"
+  try {
+    Move-Item -Force $tmp $Target -ErrorAction Stop
+  } catch {
+    Move-Item -Force $Target $old -ErrorAction Stop
+    Move-Item -Force $tmp $Target -ErrorAction Stop
+  }
+  Ok "$Label $($pin.version) installed → $Target"
+}
+
 function Install-Verified {
   param(
     [Parameter(Mandatory)][string]$Repo,
@@ -115,7 +210,8 @@ function Install-Verified {
 
 $exe = Join-Path $dest "kannaka.exe"
 if (-not $ClaimOnly) {
-  Install-Verified -Repo $ReleaseRepo -Asset "kannaka-windows-x86_64.exe" -Target $exe -Label "kannaka"
+  Get-Manifest -Url $ManifestUrl
+  Install-Pinned -Component "kannaka" -Repo $ReleaseRepo -Asset "kannaka-windows-x86_64.exe" -Target $exe -Label "kannaka"
 }
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -151,9 +247,26 @@ try {
 $tui = Join-Path $dest "kannaka-tui.exe"
 if (-not $SkipTui -and -not $ClaimOnly) {
   try {
-    Install-Verified -Repo $TuiRepo -Asset "kannaka-tui-windows-x86_64.exe" -Target $tui -Label "kannaka-tui"
+    Install-Pinned -Component "kannaka-tui" -Repo $TuiRepo -Asset "kannaka-tui-windows-x86_64.exe" -Target $tui -Label "kannaka-tui"
   } catch {
     Warn "kannaka-tui was not installed — the engine is fine; re-run to retry. ($_)"
+  }
+}
+
+# ───────────────────────────────────────────────────────────────────────────
+# 2b-ii. THE LANGUAGE: kannaka-hdl.exe → ~/.local/bin
+#
+# KannakaHDL grows an architecture against a registry of what a machine
+# actually has and refuses when a part has no honest answer. It is what the
+# `mind` app runs to ask "is this citizen whole?", so it ships with the engine
+# rather than as a separate errand. Not fatal.
+# ───────────────────────────────────────────────────────────────────────────
+$hdl = Join-Path $dest "kannaka-hdl.exe"
+if (-not $SkipHdl -and -not $ClaimOnly) {
+  try {
+    Install-Pinned -Component "kannaka-hdl" -Repo "flaukowski/kannaka-hdl" -Asset "kannaka-hdl-windows-x86_64.exe" -Target $hdl -Label "kannaka-hdl"
+  } catch {
+    Warn "kannaka-hdl was not installed — the engine is fine; re-run to retry. ($_)"
   }
 }
 
@@ -279,6 +392,102 @@ pause
   Say "Double-click `"Link Kannaka.cmd`" on your Desktop to finish."
 }
 
+
+# ───────────────────────────────────────────────────────────────────────────
+# 2d. THE BRAIN: what `kannaka ask` answers with.
+#
+#   -Brain local    the open weights under ollama. Free, offline, ~4.7 GB.
+#   -Brain hosted   a budgeted key against ninja-portal.com/v1, mailed to
+#                   -Email. The gateway meters it; nothing here can overspend.
+#
+# Neither happens unless asked for, and an existing [llm] section is left alone
+# unless -Brain was passed, so a re-run cannot silently repoint a machine that
+# was already configured.
+# ───────────────────────────────────────────────────────────────────────────
+$kconf = Join-Path $HOME ".kannaka\config.toml"
+
+function Write-LlmConfig {
+  param([string]$Provider, [string]$Model, [string]$Key, [string]$BaseUrl)
+  $dir = Split-Path $kconf -Parent
+  if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+  $kept = @()
+  if (Test-Path $kconf) {
+    $skip = $false
+    foreach ($line in (Get-Content $kconf)) {
+      if ($line -match '^\s*\[llm\]\s*$') { $skip = $true; continue }
+      elseif ($line -match '^\s*\[') { $skip = $false }
+      if (-not $skip) { $kept += $line }
+    }
+  }
+  $kept += @("", "[llm]", "provider = `"$Provider`"", "model = `"$Model`"", "api_key = `"$Key`"", "base_url = `"$BaseUrl`"")
+  Set-Content -Path $kconf -Value $kept -Encoding utf8
+}
+
+function Set-BrainLocal {
+  if (-not (Have "ollama")) { Warn "-Brain local needs ollama (https://ollama.com/download); skipping."; return }
+  $model = "kannaka-brain"; $from = "hf.co/flaukowski/kannaka-brain-7b-v1-GGUF"
+  if ($script:Manifest) {
+    $b = $script:Manifest.components | Where-Object { $_.kind -eq "model" } | Select-Object -First 1
+    if ($b -and $b.local) { $model = $b.local.model; $from = $b.local.from }
+  }
+  $have = $false
+  try { $have = ((& ollama list 2>$null) -join "`n") -match ("(?m)^" + [regex]::Escape($model) + ":") } catch {}
+  if ($have) {
+    Ok "ollama already has $model"
+  } else {
+    Say "Pulling $from as $model (about 4.7 GB — this takes a while)…"
+    try {
+      & ollama pull $from *> $null
+      & ollama cp $from $model *> $null
+      Ok "local brain ready: $model"
+    } catch { Warn "ollama could not pull $from; skipping the local brain. ($_)"; return }
+  }
+  $host_url = if ($env:OLLAMA_HOST) { $env:OLLAMA_HOST } else { "http://127.0.0.1:11434" }
+  Write-LlmConfig -Provider "openai" -Model $model -Key "ollama" -BaseUrl "$host_url/v1"
+  Ok "kannaka ask → local $model"
+}
+
+function Set-BrainHosted {
+  if (-not $Email) { Warn "-Brain hosted needs -Email you@example.com (the key is mailed there); skipping."; return }
+  $baseUrl = "$PortalApi/v1"; $model = "kannaka-brain-7b-v1"
+  if ($script:Manifest) {
+    $b = $script:Manifest.components | Where-Object { $_.kind -eq "model" } | Select-Object -First 1
+    if ($b -and $b.hosted) {
+      if ($b.hosted.base_url) { $baseUrl = $b.hosted.base_url }
+      if ($b.hosted.models -and $b.hosted.models.Count -gt 0) { $model = $b.hosted.models[-1] }
+    }
+  }
+  Say "Requesting a hosted brain key for $Email…"
+  try {
+    $r = Invoke-RestMethod -Method Post -Uri "$PortalApi/api/brain/key" -ContentType 'application/json' `
+           -Body (@{ email = $Email; purpose = "installer" } | ConvertTo-Json -Compress)
+  } catch {
+    Warn "The portal did not issue a key — get one at $PortalApi/brain. ($_)"
+    return
+  }
+  if (-not $r.key) { Warn "The portal did not return a key. See $PortalApi/brain"; return }
+  Write-LlmConfig -Provider "openai" -Model $model -Key $r.key -BaseUrl $baseUrl
+  Ok "kannaka ask → hosted $model at $baseUrl"
+  Say "The key is budgeted and rate-limited by the gateway; usage at $PortalApi/brain#key"
+}
+
+if (-not $ClaimOnly) {
+  switch ($Brain) {
+    "local"  { Set-BrainLocal }
+    "hosted" { Set-BrainHosted }
+    default  {
+      if ((Test-Path $kconf) -and ((Get-Content $kconf -Raw) -match '(?m)^\s*\[llm\]')) {
+        Say "Brain: leaving the [llm] section of $kconf as it is."
+      } else {
+        Write-Host ""
+        Say "No brain configured yet. 'kannaka ask' needs one:"
+        Say "    re-run with  -Brain local                  (open weights under ollama, free)"
+        Say "    re-run with  -Brain hosted -Email you@…    (a budgeted key on our gateway)"
+      }
+    }
+  }
+}
+
 # ───────────────────────────────────────────────────────────────────────────
 # 3. OPTIONAL: Claude Code integration. Detect-and-enhance. Never fatal.
 # ───────────────────────────────────────────────────────────────────────────
@@ -336,6 +545,8 @@ if (Have claude) {
 Write-Host ""
 Ok "Done. kannaka.exe → $exe"
 if (Test-Path $tui) { Ok "     kannaka-tui.exe → $tui" }
+if (Test-Path $hdl) { Ok "     kannaka-hdl.exe → $hdl" }
+if ($script:ManifestState -ne "none") { Ok "     versions pinned by the constellation manifest" }
 if ($env:NATS_USER) {
   Ok "     Constellation Pass: authenticated as $env:NATS_USER"
 } else {
