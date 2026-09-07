@@ -31,7 +31,11 @@ PORTAL_API="${KANNAKA_PORTAL_API:-https://ninja-portal.com}"
 # COHERENT SET rather than whatever each repo's `latest` happened to be when
 # each download ran. Unreachable manifest = fall back to `latest` and say so.
 MANIFEST_URL="${KANNAKA_MANIFEST:-https://ninja-portal.com/constellation.tsv}"
-MANIFEST_FALLBACK="https://nickflach.github.io/kannaka-library/constellation.tsv"
+# The fallback is a RELEASE asset, not a Pages URL. When the constellation moved
+# into an organisation, every other URL shape redirected and Pages did not:
+# <old-owner>.github.io/<repo> simply 404s afterwards. A release download URL
+# redirects like a repository does, so this survives the next move too.
+MANIFEST_FALLBACK="https://github.com/kannaka-labs/kannaka-library/releases/download/library/constellation.tsv"
 MANIFEST=""            # path to the verified copy, empty when unavailable
 MANIFEST_STATE="none"  # none | unsigned | signed
 NO_MANIFEST=0
@@ -88,7 +92,7 @@ have() { command -v "$1" >/dev/null 2>&1; }
 # manifest carries, so a tampered manifest still cannot make an unverified
 # binary land on disk — it can only name a different, real, hashed file.
 # ───────────────────────────────────────────────────────────────────────────
-MANIFEST_PUB_URL="${KANNAKA_MANIFEST_PUB:-https://nickflach.github.io/kannaka-library/manifest.pub}"
+MANIFEST_PUB_URL="${KANNAKA_MANIFEST_PUB:-https://github.com/kannaka-labs/kannaka-library/releases/download/library/manifest.pub}"
 
 openssl3() {
   for c in /opt/homebrew/opt/openssl@3/bin/openssl /usr/local/opt/openssl@3/bin/openssl openssl; do

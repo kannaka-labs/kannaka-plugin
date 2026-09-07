@@ -87,7 +87,9 @@ $script:ManifestState = "none"
 function Get-Manifest {
   param([string]$Url)
   if ($NoManifest) { Say "Manifest skipped (-NoManifest); using each repo's latest release."; return }
-  foreach ($u in @($Url, "https://nickflach.github.io/kannaka-library/constellation.json")) {
+  # The fallback is a RELEASE asset, not a Pages URL: when the constellation moved
+  # into an organisation every other URL shape redirected and Pages did not.
+  foreach ($u in @($Url, "https://github.com/kannaka-labs/kannaka-library/releases/download/library/constellation.json")) {
     try {
       $raw = (Invoke-WebRequest -Uri $u -UseBasicParsing -TimeoutSec 20).Content
       $m = $raw | ConvertFrom-Json
