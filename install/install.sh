@@ -107,7 +107,13 @@ load_manifest() {
   [ "$NO_MANIFEST" = "1" ] && { say "Manifest skipped (--no-manifest); using each repo's latest release."; return 1; }
   have curl || return 1
   lm_tmp="${TMPDIR:-/tmp}/kannaka-manifest.$$"
+  # Remember WHICH url served it. The signature is fetched from alongside the
+  # manifest, and deriving it from $MANIFEST_URL regardless meant every install
+  # that fell back looked for a signature next to a url that had just failed —
+  # so a fallback install silently reported "unsigned" and skipped the check.
+  lm_from="$MANIFEST_URL"
   if ! curl -fsSL --max-time 20 "$MANIFEST_URL" -o "$lm_tmp" 2>/dev/null; then
+    lm_from="$MANIFEST_FALLBACK"
     curl -fsSL --max-time 20 "$MANIFEST_FALLBACK" -o "$lm_tmp" 2>/dev/null || {
       rm -f "$lm_tmp"
       warn "Could not fetch the constellation manifest — falling back to each repo's latest release."
@@ -120,7 +126,7 @@ load_manifest() {
     rm -f "$lm_tmp"; warn "The manifest did not look like a manifest — using latest releases."; return 1
   fi
   MANIFEST="$lm_tmp"; MANIFEST_STATE="unsigned"
-  if ssl=$(openssl3) && curl -fsSL --max-time 20 "${MANIFEST_URL}.sig" -o "$lm_tmp.sig" 2>/dev/null \
+  if ssl=$(openssl3) && curl -fsSL --max-time 20 "${lm_from}.sig" -o "$lm_tmp.sig" 2>/dev/null \
      && curl -fsSL --max-time 20 "$MANIFEST_PUB_URL" -o "$lm_tmp.pub" 2>/dev/null; then
     if base64 -d < "$lm_tmp.sig" > "$lm_tmp.sigraw" 2>/dev/null || base64 -D < "$lm_tmp.sig" > "$lm_tmp.sigraw" 2>/dev/null; then
       if "$ssl" pkeyutl -verify -pubin -inkey "$lm_tmp.pub" -rawin -in "$lm_tmp" -sigfile "$lm_tmp.sigraw" >/dev/null 2>&1; then
