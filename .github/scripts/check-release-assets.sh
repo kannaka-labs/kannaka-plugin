@@ -6,7 +6,7 @@
 #   - install/install.ps1
 #   - plugins/kannaka/scripts/install-binary.sh
 # downloads the engine binary from the LATEST GitHub release of
-# NickFlach/kannaka-memory (install-binary.sh also accepts an explicit tag).
+# kannaka-labs/kannaka-memory (install-binary.sh also accepts an explicit tag).
 # The "pin" is therefore that release + the asset names the installers ask for.
 #
 # This check asserts the pin is intact:
@@ -20,7 +20,7 @@
 # here instead of on users' machines.
 set -euo pipefail
 
-REPO="${KANNAKA_RELEASE_REPO:-NickFlach/kannaka-memory}"
+REPO="${KANNAKA_RELEASE_REPO:-kannaka-labs/kannaka-memory}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 
 # Binary asset matrix — mirrors the installers exactly:

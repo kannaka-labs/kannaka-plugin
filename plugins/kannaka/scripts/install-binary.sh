@@ -3,7 +3,7 @@
 # Usage: install-binary.sh [tag]        (default: latest)
 # Override repo with KANNAKA_RELEASE_REPO, install dir with KANNAKA_BIN_DIR.
 set -uo pipefail
-REPO="${KANNAKA_RELEASE_REPO:-NickFlach/kannaka-memory}"
+REPO="${KANNAKA_RELEASE_REPO:-kannaka-labs/kannaka-memory}"
 DEST_DIR="${KANNAKA_BIN_DIR:-$HOME/.local/bin}"
 TAG="${1:-latest}"
 

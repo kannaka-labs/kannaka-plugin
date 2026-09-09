@@ -43,7 +43,7 @@ Memory + swarm tools shell out to the resolved `kannaka` binary and degrade grac
 
 ```bash
 # 1. Register the marketplace
-claude plugin marketplace add github:NickFlach/kannaka-plugin
+claude plugin marketplace add github:kannaka-labs/kannaka-plugin
 
 # 2. Install the plugin
 claude plugin install kannaka@kannaka
