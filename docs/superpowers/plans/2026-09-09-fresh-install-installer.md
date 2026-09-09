@@ -242,8 +242,11 @@ case "$*" in "plugin marketplace list") printf '%s\n' "$FAKE_MARKETPLACES" ;; es
 EOF
   chmod +x "$ri_stub"/*
   rm -f "$ri_log/brew" "$ri_log/npm" "$ri_log/claude"
-  # PATH: stubs first, then the two "earlier than target" dirs a shadow can hide in
-  HOME="$ri_home" PATH="$ri_stub:$ri_home/shadow:$ri_home/.cargo/bin:$ri_home/.local/bin:/usr/bin:/bin" \
+  # PATH: stubs first, then the two "earlier than target" dirs a shadow can hide in.
+  # NO_DEST_ON_PATH=1 leaves ~/.local/bin off PATH so the installer has to write its rc block.
+  ri_path="$ri_stub:$ri_home/shadow:$ri_home/.cargo/bin:$ri_home/.local/bin:/usr/bin:/bin"
+  [ "${NO_DEST_ON_PATH:-0}" = "1" ] && ri_path="$ri_stub:$ri_home/shadow:$ri_home/.cargo/bin:/usr/bin:/bin"
+  HOME="$ri_home" PATH="$ri_path" \
     STUB_LOG="$ri_log" FAKE_SHA="${FAKE_SHA:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}" SHELL=/bin/bash SKIP_STATUSLINE=1 \
     FAKE_BREW_LIST="${FAKE_BREW_LIST:-}" FAKE_BREW_TAPS="${FAKE_BREW_TAPS:-}" \
     FAKE_NPM_GLOBALS="${FAKE_NPM_GLOBALS:-}" FAKE_MARKETPLACES="${FAKE_MARKETPLACES:-}" \
@@ -522,7 +525,7 @@ rm -rf "$root"
 
 echo "rc edit is recorded when the installer makes one"
 root="$(mktemp -d)"; home="$root/home"; mkdir -p "$home/.local/bin"
-run_install "$home"     # fresh HOME: no .bashrc, so the installer writes the PATH block
+NO_DEST_ON_PATH=1 run_install "$home"     # fresh HOME, dest not on PATH: the installer writes the PATH block
 "$PY" -c "import json,sys; r=json.load(open(sys.argv[1])); assert r['rc_edits']==[{'file': sys.argv[2]+'/.bashrc', 'sentinel': '# kannaka'}], r['rc_edits']" "$home/.kannaka/install.json" "$home" && ok "rc_edits names .bashrc" || fail "rc_edits wrong"
 rm -rf "$root"
 
@@ -710,7 +713,8 @@ git commit -m "tests: mutation proves the installer's identity guard; run the li
 **Interfaces:**
 - Produces (PowerShell; the test lifts each `function` block by regex and dot-evaluates it):
   - `-KeepOthers` switch
-  - `$script:InstallerVersion = 2`; `$script:Receipt` = `<KANNAKA_DATA_DIR or $HOME\.kannaka>\install.json`
+  - `$script:InstallerVersion = 2`; `$script:HomeDir = $HOME` (every new function reads this, never `$HOME`, because `$HOME` is read-only and the test points `HomeDir` at a temp dir); `$script:Receipt` = `<KANNAKA_DATA_DIR or HomeDir\.kannaka>\install.json`
+  - every new function closes with `}` on its own line at column 0 (the test's `Lift` regex depends on it)
   - `Invoke-VersionBanner([string]$Path)` → first line of `--version` with a 5 s timeout, or `$null`. **The only function that spawns a process; the test replaces exactly it.**
   - `Get-BannerComponent([string]$Path)` → `kannaka` | `kannaka-tui` | `kannaka-hdl` | `$null`
   - `Get-FileSha256([string]$Path)` → lowercase hex
@@ -749,7 +753,7 @@ foreach ($f in 'Say','Warn','Ok','Have','Get-BannerComponent','Get-FileSha256','
 $KeepOthers = $false
 $script:Removed = [System.Collections.ArrayList]@(); $script:Kept = [System.Collections.ArrayList]@()
 $script:RcEdits = @(); $script:ConfigEdited = $false; $script:CredsWritten = $false; $script:Registrations = $false
-$script:InstallerVersion = 2; $script:Manifest = $null
+$script:InstallerVersion = 2; $script:Manifest = $null; $script:HomeDir = $env:TEMP
 $script:Banners = @{}
 function Invoke-VersionBanner([string]$Path) { if ($script:Banners.ContainsKey($Path)) { $script:Banners[$Path] } else { $null } }
 function Ours([string]$Path, [string]$Component, [string]$Version) {
@@ -769,7 +773,7 @@ Check "sha256" "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
 Write-Host "sweep"
 $home_ = Join-Path $root "home"; $dest = "$home_\.local\bin"; $old = "$home_\AppData\Local\Programs\kannaka"
 foreach ($d in $dest, $old, "$home_\.cargo\bin", "$home_\.kannaka") { New-Item -ItemType Directory -Force -Path $d | Out-Null }
-$homeSaved = $HOME; Set-Variable -Name HOME -Value $home_ -Force -Scope Global
+$script:HomeDir = $home_
 $lapSaved = $env:LOCALAPPDATA; $env:LOCALAPPDATA = "$home_\AppData\Local"
 $pathSaved = $env:Path; $env:Path = "$old;$dest;$pathSaved"
 Ours "$dest\kannaka.exe" kannaka 0.15.0
@@ -831,7 +835,7 @@ function Get-BannerComponent([string]$Path) { "kannaka" }
 Invoke-Sweep -Dest $dest
 Check "mutant deleted the impostor (fixture reaches the guard)" $false (Test-Path "$home_\.cargo\bin\kannaka-hdl.exe")
 
-Set-Variable -Name HOME -Value $homeSaved -Force -Scope Global; $env:LOCALAPPDATA = $lapSaved; $env:Path = $pathSaved
+$env:LOCALAPPDATA = $lapSaved; $env:Path = $pathSaved
 Remove-Item -Recurse -Force $root
 if ($fails -gt 0) { Write-Host "installer-lifecycle.ps1: $fails failed"; exit 1 } else { Write-Host "installer-lifecycle.ps1: all cases passed" }
 ```
@@ -859,7 +863,10 @@ After `function Have` (line 49) add:
 # isolated in Invoke-VersionBanner so the tests can replace exactly that.
 # ───────────────────────────────────────────────────────────────────────────
 $script:InstallerVersion = 2
-$script:Receipt = Join-Path $(if ($env:KANNAKA_DATA_DIR) { $env:KANNAKA_DATA_DIR } else { Join-Path $HOME ".kannaka" }) "install.json"
+# $HOME is a read-only automatic variable; new code reads this copy so the
+# tests can point it at a throwaway directory.
+$script:HomeDir = $HOME
+$script:Receipt = Join-Path $(if ($env:KANNAKA_DATA_DIR) { $env:KANNAKA_DATA_DIR } else { Join-Path $script:HomeDir ".kannaka" }) "install.json"
 $script:Removed = [System.Collections.ArrayList]@()
 $script:Kept = [System.Collections.ArrayList]@()
 $script:RcEdits = @()            # Windows has no rc file; kept for schema parity
@@ -886,7 +893,9 @@ function Get-BannerComponent([string]$Path) {
   $null
 }
 
-function Get-FileSha256([string]$Path) { (Get-FileHash $Path -Algorithm SHA256).Hash.ToLower() }
+function Get-FileSha256([string]$Path) {
+  (Get-FileHash $Path -Algorithm SHA256).Hash.ToLower()
+}
 
 # Remove-Ours: delete iff the file identifies as a component. A locked exe (it
 # is running) is parked as <name>.bak-<pid>; the next kannaka or installer
@@ -914,8 +923,12 @@ function Remove-StaleBeside([string]$Binary) {
 }
 
 # User-PATH access is isolated so the test can substitute it.
-function Get-UserPath { [Environment]::GetEnvironmentVariable("Path", "User") }
-function Set-UserPath([string]$v) { [Environment]::SetEnvironmentVariable("Path", $v, "User") }
+function Get-UserPath {
+  [Environment]::GetEnvironmentVariable("Path", "User")
+}
+function Set-UserPath([string]$v) {
+  [Environment]::SetEnvironmentVariable("Path", $v, "User")
+}
 
 function Invoke-Sweep([string]$Dest) {
   if ($KeepOthers) { Say "Keeping other installs (-KeepOthers)."; return }
@@ -931,7 +944,7 @@ function Invoke-Sweep([string]$Dest) {
     Remove-StaleBeside $t
   }
   # 2. the old memory-installer directory and the cargo era
-  $oldDirs = @((Join-Path $env:LOCALAPPDATA "Programs\kannaka"), (Join-Path $HOME ".cargo\bin"))
+  $oldDirs = @((Join-Path $env:LOCALAPPDATA "Programs\kannaka"), (Join-Path $script:HomeDir ".cargo\bin"))
   $emptied = @()
   foreach ($d in $oldDirs) {
     if (-not (Test-Path $d)) { continue }
@@ -980,7 +993,7 @@ function Write-Receipt([string]$Dest, [string]$Platform) {
     $files += [ordered]@{ path = $p; sha256 = (Get-FileSha256 $p); component = $c; version = $ver }
   }
   $regs = @(); if ($script:Registrations) { $regs = @([ordered]@{ kind = "claude-marketplace"; name = "kannaka-labs/kannaka-plugin" }, [ordered]@{ kind = "claude-plugin"; name = "kannaka@kannaka" }) }
-  $cfg = @(); if ($script:ConfigEdited) { $cfg = @([ordered]@{ file = (Join-Path $HOME ".kannaka\config.toml"); sections = @("llm") }) }
+  $cfg = @(); if ($script:ConfigEdited) { $cfg = @([ordered]@{ file = (Join-Path $script:HomeDir ".kannaka\config.toml"); sections = @("llm") }) }
   $creds = @(); if ($script:CredsWritten) { $creds = @([ordered]@{ kind = "user-env"; names = @("NATS_USER", "NATS_PASSWORD") }) }
   # rotate three deep, then list what exists
   if (Test-Path "$($script:Receipt).2") { Move-Item -Force "$($script:Receipt).2" "$($script:Receipt).3" }
