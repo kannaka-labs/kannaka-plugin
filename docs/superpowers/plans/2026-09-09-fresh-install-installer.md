@@ -242,7 +242,7 @@ EOF
   rm -f "$ri_log/brew" "$ri_log/npm" "$ri_log/claude"
   # PATH: stubs first, then the two "earlier than target" dirs a shadow can hide in
   HOME="$ri_home" PATH="$ri_stub:$ri_home/shadow:$ri_home/.cargo/bin:$ri_home/.local/bin:/usr/bin:/bin" \
-    STUB_LOG="$ri_log" FAKE_SHA="${FAKE_SHA:-abc}" SHELL=/bin/bash SKIP_STATUSLINE=1 \
+    STUB_LOG="$ri_log" FAKE_SHA="${FAKE_SHA:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}" SHELL=/bin/bash SKIP_STATUSLINE=1 \
     FAKE_BREW_LIST="${FAKE_BREW_LIST:-}" FAKE_BREW_TAPS="${FAKE_BREW_TAPS:-}" \
     FAKE_NPM_GLOBALS="${FAKE_NPM_GLOBALS:-}" FAKE_MARKETPLACES="${FAKE_MARKETPLACES:-}" \
     sh "$INSTALL_SH" "$@" > "$ri_log/out" 2>&1
@@ -495,7 +495,8 @@ paths = {f["path"] for f in r["files"]}
 assert paths == {home + "/.local/bin/kannaka", home + "/.local/bin/kannaka-tui", home + "/.local/bin/kannaka-hdl"}, paths
 for f in r["files"]:
     assert len(f["sha256"]) == 64 and f["component"] in f["path"] and f["version"] == "9.9.9", f
-assert {e["file"] for e in r["rc_edits"]} == set(), r["rc_edits"]   # PATH line pre-existed in .bashrc
+# the PATH line pre-existed in .bashrc (not recorded); the credentials block did not (recorded)
+assert {(e["file"], e["sentinel"]) for e in r["rc_edits"]} == {(home + "/.bashrc", "# kannaka swarm credentials")}, r["rc_edits"]
 assert r["config_edits"] == [], r["config_edits"]          # no --brain: nothing written to config.toml
 assert r["credentials"] == [], r["credentials"]            # creds pre-existed: not written by this run
 removed = {(x["path"], x["reason"]) for x in r["removed"]}
