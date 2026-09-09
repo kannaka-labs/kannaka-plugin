@@ -112,3 +112,7 @@ plugins/kannaka/
   scripts/
     install-binary.sh                # per-OS binary download from GH releases
 ```
+
+## License
+
+[Space Child License v1.0](https://legal.spacechild.love/license) — source-available and peace-conditional: free for peaceful, humanitarian, commercial and defensive use; withheld for the uses in its Peace Clause. See `LICENSE` and `NOTICE`.
