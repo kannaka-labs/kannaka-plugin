@@ -57,14 +57,14 @@ any artifact — here the checksums manifest itself:
 cosign verify-blob \
   --certificate      SHA256SUMS.txt.pem \
   --signature        SHA256SUMS.txt.sig \
-  --certificate-identity-regexp '^https://github\.com/NickFlach/kannaka-plugin/\.github/workflows/release-installers\.yml@refs/tags/v' \
+  --certificate-identity-regexp '^https://github\.com/kannaka-labs/kannaka-plugin/\.github/workflows/release-installers\.yml@refs/tags/v' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   SHA256SUMS.txt
 ```
 
 Swap `SHA256SUMS.txt` for `kannaka-setup-windows.msi` (and its `.pem`/`.sig`) to
 verify an installer directly. A successful verify means the signature was
-produced by the `release-installers.yml` workflow of `NickFlach/kannaka-plugin`
+produced by the `release-installers.yml` workflow of `kannaka-labs/kannaka-plugin`
 on a `v*` tag — recorded in the public [Rekor](https://docs.sigstore.dev/logging/overview/)
 transparency log. No shared key or downloaded public key is involved; the
 identity *is* the proof.
@@ -110,7 +110,7 @@ it through the **same** signing step the real secrets use, and asserts a
 signature came out:
 
 ```bash
-gh workflow run release-installers.yml --repo NickFlach/kannaka-plugin \
+gh workflow run release-installers.yml --repo kannaka-labs/kannaka-plugin \
   -f sign_smoke_test=true
 ```
 
@@ -188,8 +188,8 @@ base64 -i kannaka-cert.pfx | tr -d '\n' > cert.b64
 #    [Convert]::ToBase64String([IO.File]::ReadAllBytes("kannaka-cert.pfx")) | Set-Content cert.b64
 
 # 2. add the two secrets
-gh secret set WINDOWS_CERT_PFX_BASE64 --repo NickFlach/kannaka-plugin < cert.b64
-gh secret set WINDOWS_CERT_PASSWORD   --repo NickFlach/kannaka-plugin   # paste the .pfx password
+gh secret set WINDOWS_CERT_PFX_BASE64 --repo kannaka-labs/kannaka-plugin < cert.b64
+gh secret set WINDOWS_CERT_PASSWORD   --repo kannaka-labs/kannaka-plugin   # paste the .pfx password
 
 rm cert.b64
 ```
@@ -220,7 +220,7 @@ rm cert.b64
 > tell you, without cutting a release:
 >
 > ```bash
-> gh workflow run release-installers.yml --repo NickFlach/kannaka-plugin \
+> gh workflow run release-installers.yml --repo kannaka-labs/kannaka-plugin \
 >   -f sign_smoke_test=true
 > ```
 >
@@ -237,12 +237,12 @@ You need: a **"Developer ID Installer"** certificate exported as `.p12`, and an
 base64 -i developerid-installer.p12 | tr -d '\n' > cert.b64
 
 # 2. add the secrets
-gh secret set MACOS_CERT_P12_BASE64 --repo NickFlach/kannaka-plugin < cert.b64
-gh secret set MACOS_CERT_PASSWORD   --repo NickFlach/kannaka-plugin   # the .p12 export password
-gh secret set MACOS_SIGN_IDENTITY   --repo NickFlach/kannaka-plugin   # e.g. "Developer ID Installer: Nick Flach (TEAMID)"
-gh secret set MACOS_NOTARY_APPLE_ID --repo NickFlach/kannaka-plugin   # your Apple ID email
-gh secret set MACOS_NOTARY_TEAM_ID  --repo NickFlach/kannaka-plugin   # 10-char Team ID
-gh secret set MACOS_NOTARY_PASSWORD --repo NickFlach/kannaka-plugin   # app-specific password
+gh secret set MACOS_CERT_P12_BASE64 --repo kannaka-labs/kannaka-plugin < cert.b64
+gh secret set MACOS_CERT_PASSWORD   --repo kannaka-labs/kannaka-plugin   # the .p12 export password
+gh secret set MACOS_SIGN_IDENTITY   --repo kannaka-labs/kannaka-plugin   # e.g. "Developer ID Installer: Nick Flach (TEAMID)"
+gh secret set MACOS_NOTARY_APPLE_ID --repo kannaka-labs/kannaka-plugin   # your Apple ID email
+gh secret set MACOS_NOTARY_TEAM_ID  --repo kannaka-labs/kannaka-plugin   # 10-char Team ID
+gh secret set MACOS_NOTARY_PASSWORD --repo kannaka-labs/kannaka-plugin   # app-specific password
 
 rm cert.b64
 ```
@@ -253,7 +253,7 @@ rm cert.b64
 git -C kannaka-plugin tag -f v1.4.1            # any new tag works; bump versions first if you like
 git -C kannaka-plugin push -f origin v1.4.1
 # watch:
-gh run watch --repo NickFlach/kannaka-plugin
+gh run watch --repo kannaka-labs/kannaka-plugin
 ```
 
 The Actions log will show **"Sign .msi …"** / **"Sign + notarize .pkg …"** running

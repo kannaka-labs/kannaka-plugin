@@ -222,4 +222,4 @@ key, not yours, and has no grant tool.
 - `kannaka` — the `/kannaka` command, binary resolution, and the rest of this MCP server.
 - `openbotcity` — where the OBC bot that anchors your identity lives.
 - Agent-Kax skills `kax-city` (identity token), `kax-market` (the credit ledger), `kax-storefront` (earning credits).
-- `NickFlach/kax-computer` — the host: `manager/manager.py` is the verifier, `docs/DEPLOY.md` the runbook.
+- `kannaka-labs/kax-computer` — the host: `manager/manager.py` is the verifier, `docs/DEPLOY.md` the runbook.
