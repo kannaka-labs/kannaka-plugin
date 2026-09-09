@@ -78,6 +78,8 @@ check() { # check <label> <expected> <actual>
   if [ "$2" = "$3" ]; then ok "$1"; else fail "$1 (expected: $2, actual: $3)"; fi
 }
 lift() { sed -n "/^$1() {/,/^}/p" "$INSTALL_SH"; }
+# python3 on Linux/macOS CI; plain `python` on a Windows dev box (Git Bash)
+PY=$(command -v python3 2>/dev/null || command -v python)
 
 # A stub binary that answers --version like the real component does.
 mk_ours() { # mk_ours <path> <component> <version>
@@ -484,7 +486,7 @@ root="$(mktemp -d)"; home="$root/home"; populate_old "$home"
 FAKE_BREW_LIST="kannaka" run_install "$home"
 R="$home/.kannaka/install.json"
 [ -f "$R" ] && ok "receipt exists" || fail "no receipt"
-python3 - "$R" "$home" <<'PY' && ok "receipt fields" || fail "receipt content"
+"$PY" - "$R" "$home" <<'PY' && ok "receipt fields" || fail "receipt content"
 import json, sys
 r = json.load(open(sys.argv[1])); home = sys.argv[2]
 assert r["schema"] == 1, r
@@ -513,7 +515,7 @@ newest=$(ls -t "$home/.local/bin" | head -1)
 # a second install rotates
 run_install "$home"
 [ -f "$R.1" ] && ok "previous receipt rotated to .1" || fail "no rotation"
-python3 -c "import json,sys; r=json.load(open(sys.argv[1])); assert r['previous']==['install.json.1'], r['previous']" "$R" && ok "previous lists .1" || fail "previous wrong"
+"$PY" -c "import json,sys; r=json.load(open(sys.argv[1])); assert r['previous']==['install.json.1'], r['previous']" "$R" && ok "previous lists .1" || fail "previous wrong"
 run_install "$home"; run_install "$home"; run_install "$home"
 [ -f "$R.3" ] && [ ! -f "$R.4" ] && ok "at most three deep" || fail "rotation depth wrong"
 rm -rf "$root"
@@ -521,7 +523,7 @@ rm -rf "$root"
 echo "rc edit is recorded when the installer makes one"
 root="$(mktemp -d)"; home="$root/home"; mkdir -p "$home/.local/bin"
 run_install "$home"     # fresh HOME: no .bashrc, so the installer writes the PATH block
-python3 -c "import json,sys; r=json.load(open(sys.argv[1])); assert r['rc_edits']==[{'file': sys.argv[2]+'/.bashrc', 'sentinel': '# kannaka'}], r['rc_edits']" "$home/.kannaka/install.json" "$home" && ok "rc_edits names .bashrc" || fail "rc_edits wrong"
+"$PY" -c "import json,sys; r=json.load(open(sys.argv[1])); assert r['rc_edits']==[{'file': sys.argv[2]+'/.bashrc', 'sentinel': '# kannaka'}], r['rc_edits']" "$home/.kannaka/install.json" "$home" && ok "rc_edits names .bashrc" || fail "rc_edits wrong"
 rm -rf "$root"
 
 echo "preserve"
