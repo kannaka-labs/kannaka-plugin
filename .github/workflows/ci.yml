@@ -52,6 +52,9 @@ jobs:
       - name: installer checksum hard-fail (install.sh)
         run: bash tests/installer-checksum.sh
 
+      - name: installer never deletes an existing binary on a failed re-download; busy binary replaced by rename (install.sh, #23)
+        run: bash tests/installer-busy-binary.sh
+
   installer-win:
     # install.ps1 is Windows-specific — verify its checksum hard-fail on a real
     # Windows PowerShell, not an emulated one.

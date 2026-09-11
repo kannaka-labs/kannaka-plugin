@@ -211,23 +211,48 @@ case "$os" in Linux*) o=linux ;; Darwin*) o=macos ;; *) warn "unsupported OS: $o
 case "$arch" in x86_64|amd64) a=x86_64 ;; aarch64|arm64) a=aarch64 ;; *) warn "unsupported arch: $arch"; exit 1 ;; esac
 base="https://github.com/$RELEASE_REPO/releases/latest/download"
 
+# sha256_of <file>  ->  lowercase hex digest on stdout; returns 1 (and warns)
+# when no sha256 tool exists, so a caller can fail closed.
+sha256_of() {
+  if have sha256sum; then sha256sum "$1" | awk '{print $1}'
+  elif have shasum; then shasum -a 256 "$1" | awk '{print $1}'
+  else warn "no sha256 tool (sha256sum/shasum) available — cannot verify"; return 1
+  fi
+}
+
 # Download one release asset and refuse to install it unverified.
 #
 # Was inline for the single binary; a second one (the TUI) made copying it the
 # obvious move and the wrong one — a checksum check that exists twice is a
-# checksum check that gets weakened once. Every failure path removes the
-# partial file, so a refused install never leaves something executable behind.
+# checksum check that gets weakened once.
+#
+# THE TEMP+MV RULE: never curl onto the destination path. Download to a
+# per-destination temp file ("$dest.download.$$"), verify THAT, chmod it, and
+# `mv -f` it over the destination. rename(2) replaces a busy inode atomically —
+# processes already running the old binary keep it, and a new invocation gets
+# the new one. Every failure path removes only the temp file and never touches
+# an existing destination, so a refused install leaves nothing executable
+# behind AND leaves whatever was already installed exactly as it was.
+#
+# Why: on 2026-09-11 a real user re-ran this installer while `kannaka` was
+# running. Linux refuses to open an executing binary for write (ETXTBSY), curl
+# exited 23, and the failure path's `rm -f "$dest"` deleted the user's working
+# binary — there was no partial download to clean up, only the install itself.
+# (Per-destination temp names also matter on their own: a shared one raced when
+# two installs ran at once and would verify the wrong file against the wrong
+# digest.)
 #
 #   fetch_verified <repo> <asset-name> <destination-path> <label>
 fetch_verified() {
   fv_repo="$1"; fv_asset="$2"; fv_dest="$3"; fv_label="$4"
   fv_base="https://github.com/$fv_repo/releases/latest/download"
-  fv_sha="${fv_dest}.sha.tmp"
+  fv_tmp="${fv_dest}.download.$$"
+  fv_sha="${fv_tmp}.sha"
 
   say "Downloading $fv_label ($fv_asset)…"
-  if ! curl -fSL "$fv_base/$fv_asset" -o "$fv_dest"; then
+  if ! curl -fSL "$fv_base/$fv_asset" -o "$fv_tmp"; then
     warn "Failed to download $fv_asset from $fv_base — check your internet connection."
-    rm -f "$fv_dest"; return 1
+    rm -f "$fv_tmp"; return 1
   fi
   # The release always publishes a per-file .sha256 (Sigstore + checksums
   # trust). A MISSING checksum means we cannot verify — fail closed rather than
@@ -235,34 +260,34 @@ fetch_verified() {
   # download's `if`, so a missing .sha256 silently skipped it.)
   if ! curl -fsSL "$fv_base/$fv_asset.sha256" -o "$fv_sha"; then
     warn "checksum $fv_asset.sha256 could not be downloaded — refusing to install an unverified binary"
-    rm -f "$fv_dest" "$fv_sha"; return 1
+    rm -f "$fv_tmp" "$fv_sha"; return 1
   fi
-  # Per-destination temp name: a shared one raced when two installs ran at once
-  # and would silently verify the wrong file against the wrong digest.
   fv_want=$(awk '{print $1}' "$fv_sha"); rm -f "$fv_sha"
   if [ -z "$fv_want" ]; then
     warn "checksum $fv_asset.sha256 was empty — refusing to install unverified"
-    rm -f "$fv_dest"; return 1
+    rm -f "$fv_tmp"; return 1
   fi
-  if have sha256sum; then fv_got=$(sha256sum "$fv_dest" | awk '{print $1}')
-  elif have shasum; then fv_got=$(shasum -a 256 "$fv_dest" | awk '{print $1}')
-  else
-    warn "no sha256 tool (sha256sum/shasum) available — cannot verify"
-    rm -f "$fv_dest"; return 1
+  if ! fv_got=$(sha256_of "$fv_tmp"); then
+    rm -f "$fv_tmp"; return 1
   fi
   if [ "$fv_want" != "$fv_got" ]; then
     warn "$fv_label sha256 mismatch (want $fv_want got $fv_got)"
-    rm -f "$fv_dest"; return 1
+    rm -f "$fv_tmp"; return 1
   fi
   say "sha256 verified"
-  chmod +x "$fv_dest"
+  if ! chmod +x "$fv_tmp" || ! mv -f "$fv_tmp" "$fv_dest"; then
+    warn "could not move the verified $fv_label into place at $fv_dest"
+    rm -f "$fv_tmp"; return 1
+  fi
   ok "$fv_label installed → $fv_dest"
 }
 
 # Download a component the manifest pinned: an exact URL and an exact sha256,
 # neither of them derived from a repo name or from "latest". Falls back to the
 # release-latest path when the component is not in the manifest, so a new
-# component works before the manifest knows about it.
+# component works before the manifest knows about it. Same temp+mv rule as
+# fetch_verified (see there for why); and when the installed file already
+# matches the pinned sha256 there is nothing to download at all.
 fetch_pinned() {
   fp_comp="$1"; fp_repo="$2"; fp_asset="$3"; fp_dest="$4"; fp_label="$5"
   if fp_row=$(manifest_asset "$fp_comp" "${o}-${a}" 2>/dev/null) && [ -n "$fp_row" ]; then
@@ -270,19 +295,31 @@ fetch_pinned() {
     fp_want=$(printf '%s' "$fp_row" | cut -f2)
     fp_ver=$(manifest_version "$fp_comp" 2>/dev/null || printf 'pinned')
     if [ -n "$fp_url" ] && [ "$fp_url" != "-" ] && [ -n "$fp_want" ] && [ "$fp_want" != "-" ]; then
-      say "Downloading $fp_label $fp_ver (pinned)…"
-      if ! curl -fSL "$fp_url" -o "$fp_dest"; then
-        warn "Failed to download $fp_label from $fp_url"; rm -f "$fp_dest"; return 1
+      # Short-circuit: the pinned bytes are already on disk. The 2026-09-11
+      # incident was a same-version re-install — the download was a no-op that
+      # still destroyed the install. Now it is a no-op that does nothing.
+      if [ -f "$fp_dest" ] && fp_have=$(sha256_of "$fp_dest" 2>/dev/null) && [ "$fp_have" = "$fp_want" ]; then
+        chmod +x "$fp_dest" 2>/dev/null || true
+        ok "$fp_label $fp_ver already installed and verified → $fp_dest"
+        return 0
       fi
-      if have sha256sum; then fp_got=$(sha256sum "$fp_dest" | awk '{print $1}')
-      elif have shasum; then fp_got=$(shasum -a 256 "$fp_dest" | awk '{print $1}')
-      else warn "no sha256 tool available — cannot verify"; rm -f "$fp_dest"; return 1; fi
+      fp_tmp="${fp_dest}.download.$$"
+      say "Downloading $fp_label $fp_ver (pinned)…"
+      if ! curl -fSL "$fp_url" -o "$fp_tmp"; then
+        warn "Failed to download $fp_label from $fp_url"; rm -f "$fp_tmp"; return 1
+      fi
+      if ! fp_got=$(sha256_of "$fp_tmp"); then
+        rm -f "$fp_tmp"; return 1
+      fi
       if [ "$fp_want" != "$fp_got" ]; then
         warn "$fp_label sha256 mismatch against the manifest (want $fp_want got $fp_got)"
-        rm -f "$fp_dest"; return 1
+        rm -f "$fp_tmp"; return 1
       fi
       say "sha256 verified against the manifest"
-      chmod +x "$fp_dest"
+      if ! chmod +x "$fp_tmp" || ! mv -f "$fp_tmp" "$fp_dest"; then
+        warn "could not move the verified $fp_label into place at $fp_dest"
+        rm -f "$fp_tmp"; return 1
+      fi
       ok "$fp_label $fp_ver installed → $fp_dest"
       return 0
     fi
