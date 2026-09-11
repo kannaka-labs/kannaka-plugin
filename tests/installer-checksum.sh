@@ -37,8 +37,14 @@ EOF
 printf '%s  %s\n' "${FAKE_GOT:-aaaa}" "$1"
 EOF
   chmod +x "$bin/curl" "$bin/uname" "$bin/sha256sum"
+  # The installer's optional steps probe for these with `command -v`; each is
+  # a no-op here so a dev box's real claude/node/npm are never touched, and
+  # PATH is fenced to the stubs + the system dirs.
+  for t in claude ollama node npm brew sudo; do
+    printf '#!/bin/sh\nexit 0\n' > "$bin/$t"; chmod +x "$bin/$t"
+  done
 
-  HOME="$home" PATH="$bin:$PATH" FAKE_SHA_PRESENT="$present" FAKE_WANT="$want" FAKE_GOT="$got" \
+  HOME="$home" PATH="$bin:/usr/bin:/bin" FAKE_SHA_PRESENT="$present" FAKE_WANT="$want" FAKE_GOT="$got" \
     SKIP_STATUSLINE=1 sh "$INSTALL_SH" >"$work/out" 2>&1
   rc=$?
   have_bin=0; [ -f "$home/.local/bin/kannaka" ] && have_bin=1

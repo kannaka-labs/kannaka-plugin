@@ -205,6 +205,11 @@ say "Kannaka installer"
 #    here is fatal; everything after is best-effort enhancement.
 # ───────────────────────────────────────────────────────────────────────────
 set -eu
+# The temp file a download is currently writing (see fetch_verified). An
+# interrupted install must not leave "kannaka.download.<pid>" next to the
+# binary; the signal exit removes it (and its .sha sidecar) and nothing else.
+CLEANUP_TMP=""
+trap '[ -n "$CLEANUP_TMP" ] && rm -f "$CLEANUP_TMP" "$CLEANUP_TMP.sha"; exit 130' INT TERM HUP
 DEST="$HOME/.local/bin"; mkdir -p "$DEST"
 os=$(uname -s); arch=$(uname -m)
 case "$os" in Linux*) o=linux ;; Darwin*) o=macos ;; *) warn "unsupported OS: $os"; exit 1 ;; esac
@@ -248,6 +253,7 @@ fetch_verified() {
   fv_base="https://github.com/$fv_repo/releases/latest/download"
   fv_tmp="${fv_dest}.download.$$"
   fv_sha="${fv_tmp}.sha"
+  CLEANUP_TMP="$fv_tmp"
 
   say "Downloading $fv_label ($fv_asset)…"
   if ! curl -fSL "$fv_base/$fv_asset" -o "$fv_tmp"; then
@@ -275,10 +281,13 @@ fetch_verified() {
     rm -f "$fv_tmp"; return 1
   fi
   say "sha256 verified"
-  if ! chmod +x "$fv_tmp" || ! mv -f "$fv_tmp" "$fv_dest"; then
+  # A directory at the destination would make `mv` drop the file INSIDE it
+  # and report success; refuse instead.
+  if [ -d "$fv_dest" ] || ! chmod +x "$fv_tmp" || ! mv -f "$fv_tmp" "$fv_dest"; then
     warn "could not move the verified $fv_label into place at $fv_dest"
     rm -f "$fv_tmp"; return 1
   fi
+  CLEANUP_TMP=""
   ok "$fv_label installed → $fv_dest"
 }
 
@@ -304,6 +313,7 @@ fetch_pinned() {
         return 0
       fi
       fp_tmp="${fp_dest}.download.$$"
+      CLEANUP_TMP="$fp_tmp"
       say "Downloading $fp_label $fp_ver (pinned)…"
       if ! curl -fSL "$fp_url" -o "$fp_tmp"; then
         warn "Failed to download $fp_label from $fp_url"; rm -f "$fp_tmp"; return 1
@@ -316,10 +326,11 @@ fetch_pinned() {
         rm -f "$fp_tmp"; return 1
       fi
       say "sha256 verified against the manifest"
-      if ! chmod +x "$fp_tmp" || ! mv -f "$fp_tmp" "$fp_dest"; then
+      if [ -d "$fp_dest" ] || ! chmod +x "$fp_tmp" || ! mv -f "$fp_tmp" "$fp_dest"; then
         warn "could not move the verified $fp_label into place at $fp_dest"
         rm -f "$fp_tmp"; return 1
       fi
+      CLEANUP_TMP=""
       ok "$fp_label $fp_ver installed → $fp_dest"
       return 0
     fi
