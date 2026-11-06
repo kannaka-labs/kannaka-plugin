@@ -11,13 +11,17 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as kax from "./kax-compute.mjs";
 
-// single source of truth: the plugin manifest (fallback literal for safety)
+// The plugin manifest inside the Claude Code plugin; the sibling package.json
+// when installed from npm as kannaka-mcp (test/npm-package.test.mjs keeps the
+// two versions equal). Fallback literal for safety.
 const VERSION = (() => {
-  try {
-    const p = join(dirname(fileURLToPath(import.meta.url)), "..", ".claude-plugin", "plugin.json");
-    const v = JSON.parse(readFileSync(p, "utf8")).version;
-    if (v) return String(v);
-  } catch {}
+  const here = dirname(fileURLToPath(import.meta.url));
+  for (const p of [join(here, "..", ".claude-plugin", "plugin.json"), join(here, "package.json")]) {
+    try {
+      const v = JSON.parse(readFileSync(p, "utf8")).version;
+      if (v) return String(v);
+    } catch {}
+  }
   return "1.3.4";
 })();
 
