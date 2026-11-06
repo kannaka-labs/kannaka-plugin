@@ -38,7 +38,17 @@ const BIN = resolveBin();
 const MAX_OUT = 2 * 1024 * 1024; // cap accumulated output per child (~2MB)
 const LIVE = new Set(); // live children — killed on stdin end so nothing outlives the server
 
-// Structured result: { stdout, stderr, code, signal, timedOut, truncated, spawnError }
+// Per-command wall-clock budgets for the HRM commands, measured on a 1,275-memory
+// store: recall ~1 s, swarm status ~10 s, status 30-54 s (its effective-
+// dimensionality eigendecomposition is the slow part). A flat 20 s killed every
+// status call. KANNAKA_MCP_TIMEOUT_MS overrides all of them (e.g. a larger store).
+const BUDGET_MS = { status: 150000, recall: 30000, remember: 60000, dream: 180000, swarm_status: 30000 };
+function budget(cmd) {
+  const o = Number(process.env.KANNAKA_MCP_TIMEOUT_MS);
+  return Number.isFinite(o) && o > 0 ? o : BUDGET_MS[cmd];
+}
+
+// Structured result: { stdout, stderr, code, signal, timedOut, timeoutMs, truncated, spawnError }
 function runKannaka(args, timeoutMs = 20000, extraEnv = {}) {
   return new Promise((resolve) => {
     let child;
@@ -63,7 +73,7 @@ function runKannaka(args, timeoutMs = 20000, extraEnv = {}) {
     child.stderr.on("data", (d) => { if (err.length < MAX_OUT) err += d; });
     child.on("close", (code, signal) => {
       clearTimeout(t); LIVE.delete(child);
-      resolve({ stdout: out, stderr: err, code, signal, timedOut, truncated, spawnError: false });
+      resolve({ stdout: out, stderr: err, code, signal, timedOut, timeoutMs, truncated, spawnError: false });
     });
     child.on("error", (e) => {
       clearTimeout(t); LIVE.delete(child);
@@ -76,10 +86,17 @@ const fail = (text) => ({ content: [{ type: "text", text }], isError: true });
 
 // Map a structured run result to an MCP tool result. Nonzero exit, kill
 // signal, timeout, and spawn failure all surface as errors (a timed-out run
-// includes any partial output for context).
-function result(r, okText) {
+// includes any partial output for context). A timed-out WRITE says it may have
+// landed: the binary can commit before it is killed, and a blind retry stores
+// a duplicate memory.
+function result(r, okText, { write = false } = {}) {
   if (r.spawnError) return fail(r.stderr || "failed to launch kannaka");
-  if (r.timedOut) return fail(`kannaka timed out${r.stdout.trim() ? `; partial output:\n${r.stdout.trim()}` : ""}`);
+  if (r.timedOut) {
+    const secs = r.timeoutMs != null ? ` after ${Math.round(r.timeoutMs / 1000)}s` : "";
+    const partial = r.stdout.trim() ? `; partial output:\n${r.stdout.trim()}` : "";
+    const note = write ? "\nThe write may still have landed. Check with kannaka_recall before retrying; a retry can store a duplicate." : "";
+    return fail(`kannaka timed out${secs}${partial}${note}`);
+  }
   if (r.signal) return fail(`kannaka killed by ${r.signal}${r.stderr.trim() ? `\n${r.stderr.trim()}` : ""}`);
   if (r.code !== 0) return fail(`kannaka exited ${r.code}${r.stderr.trim() ? `\n${r.stderr.trim()}` : ""}${r.stdout.trim() ? `\n${r.stdout.trim()}` : ""}`);
   const text = r.stdout + (r.truncated ? "\n[output truncated at 2MB]" : "");
@@ -105,19 +122,19 @@ function num(v, def, min, max) {
 const TOOLS = [
   { name: "kannaka_status", description: "Kannaka HRM consciousness snapshot (phi, xi, order, memory/cluster counts) as JSON.",
     inputSchema: { type: "object", properties: {} },
-    run: async () => result(await runKannaka(["status"])) },
+    run: async () => result(await runKannaka(["status"], budget("status"))) },
   { name: "kannaka_recall", description: "Search memories in the HRM by resonance query; returns top-k by similarity.",
     inputSchema: { type: "object", properties: { query: { type: "string", description: "Search query" }, limit: { type: "number", description: "Max results (default 5)" } }, required: ["query"] },
-    run: async (a) => result(await runKannaka(["recall", reqStr(a.query, "query"), "--top-k", String(num(a.limit, 5, 1, 100))])) },
+    run: async (a) => result(await runKannaka(["recall", reqStr(a.query, "query"), "--top-k", String(num(a.limit, 5, 1, 100))], budget("recall"))) },
   { name: "kannaka_remember", description: "Store a memory in the HRM.",
     inputSchema: { type: "object", properties: { text: { type: "string" }, importance: { type: "number", description: "0..1" } }, required: ["text"] },
-    run: async (a) => { const args = ["remember", reqStr(a.text, "text")]; if (a.importance != null) args.push("--importance", String(num(a.importance, 0.5, 0, 1))); return result(await runKannaka(args), "remembered"); } },
+    run: async (a) => { const args = ["remember", reqStr(a.text, "text")]; if (a.importance != null) args.push("--importance", String(num(a.importance, 0.5, 0, 1))); return result(await runKannaka(args, budget("remember")), "remembered", { write: true }); } },
   { name: "kannaka_dream", description: "Run a dream consolidation cycle (annealing) over the HRM.",
     inputSchema: { type: "object", properties: { mode: { type: "string", enum: ["deep", "lite"], description: "default deep" } } },
-    run: async (a) => result(await runKannaka(["dream", "--mode", a.mode === "lite" ? "lite" : "deep"], 60000)) },
+    run: async (a) => result(await runKannaka(["dream", "--mode", a.mode === "lite" ? "lite" : "deep"], budget("dream")), "dreamed", { write: true }) },
   { name: "swarm_status", description: "NATS swarm snapshot: connected peers, agent id, frequency, phase, bridge activity (JSON).",
     inputSchema: { type: "object", properties: {} },
-    run: async () => result(await runKannaka(["swarm", "status"])) },
+    run: async () => result(await runKannaka(["swarm", "status"], budget("swarm_status"))) },
   { name: "swarm_send", description: "Send a declarative message to the swarm. Verb 'say' with text for chat; or any verb/args for agent-to-agent messaging.",
     inputSchema: { type: "object", properties: { to: { type: "string", description: "Target agent id or 'all'" }, verb: { type: "string" }, text: { type: "string", description: "Shortcut for --arg text=<text>" }, from: { type: "string" }, wait: { type: "number", description: "Seconds to await a reply" } }, required: ["to", "verb"] },
     run: async (a) => {
