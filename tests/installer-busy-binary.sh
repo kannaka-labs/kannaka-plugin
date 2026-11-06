@@ -109,7 +109,7 @@ reset_opts() {
 }
 
 # run_case <label>  — seeds ~/.local/bin/kannaka (SEED: old = OLD-BYTES, busy =
-# a running copy of /bin/sleep, dir = a directory), runs the installer with the
+# a running copy of bash, dir = a directory), runs the installer with the
 # options above, and asserts the exit code, what is left at the destination,
 # and that no *.download.* temp file remains.
 run_case() {
@@ -121,8 +121,12 @@ run_case() {
   pid=""; exe_before=""
   case "$SEED" in
     busy)
-      cp "$(command -v sleep)" "$dest"; chmod +x "$dest"
-      "$dest" 60 & pid=$!
+      # A copy of bash, not sleep: Ubuntu 26.04's uutils coreutils is one
+      # multicall binary that dispatches on argv[0], so a sleep copied to
+      # "kannaka" exits with "unknown program". The trailing ':' stops bash
+      # exec-ing sleep, so this process keeps running the copied file.
+      cp "$(command -v bash)" "$dest"; chmod +x "$dest"
+      "$dest" -c 'sleep 60; :' & pid=$!
       sleep 0.2
       exe_before="$(sha_of /proc/$pid/exe)" ;;
     dir) mkdir "$dest" ;;
