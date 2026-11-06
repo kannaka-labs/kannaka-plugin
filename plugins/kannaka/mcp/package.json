@@ -1,0 +1,20 @@
+{
+  "name": "kannaka-mcp",
+  "version": "1.4.10",
+  "description": "Kannaka MCP server: HRM memory, NATS swarm and KAX compute tools over stdio, for any MCP client. Zero dependencies; drives the kannaka binary.",
+  "type": "module",
+  "main": "kannaka-mcp.mjs",
+  "bin": { "kannaka-mcp": "kannaka-mcp.mjs" },
+  "exports": {
+    ".": "./kannaka-mcp.mjs",
+    "./kax-compute": "./kax-compute.mjs",
+    "./package.json": "./package.json"
+  },
+  "files": ["kannaka-mcp.mjs", "kax-compute.mjs", "README.md", "LICENSE"],
+  "engines": { "node": ">=20" },
+  "keywords": ["mcp", "model-context-protocol", "kannaka", "memory", "nats"],
+  "author": "flaukowski <nflach78@gmail.com>",
+  "license": "SEE LICENSE IN LICENSE",
+  "repository": { "type": "git", "url": "git+https://github.com/kannaka-labs/kannaka-plugin.git", "directory": "plugins/kannaka/mcp" },
+  "homepage": "https://github.com/kannaka-labs/kannaka-plugin/tree/master/plugins/kannaka/mcp#readme"
+}
