@@ -1,6 +1,6 @@
 {
   "name": "kannaka-mcp",
-  "version": "1.4.10",
+  "version": "1.4.11",
   "description": "Kannaka MCP server: HRM memory, NATS swarm and KAX compute tools over stdio, for any MCP client. Zero dependencies; drives the kannaka binary.",
   "type": "module",
   "main": "kannaka-mcp.mjs",
