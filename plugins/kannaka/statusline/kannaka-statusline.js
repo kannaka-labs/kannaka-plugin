@@ -85,7 +85,7 @@ function refresh(cache, maxAgeS, args) {
         try{fs.writeFileSync(tmp,so);fs.renameSync(tmp,${JSON.stringify(cache)})}catch(x){try{fs.unlinkSync(tmp)}catch(y){}}
       }
     });
-    const t=setTimeout(()=>{try{p.kill()}catch(x){}},18000);
+    const t=setTimeout(()=>{try{p.kill()}catch(x){}},20000);
   `);
 }
 refresh(HRM_CACHE, 30, ["status"]);
